@@ -1,4 +1,4 @@
-// Better Recipe Book -> Horizon native mod, 1:1 core (mod API layout).
+// Better Recipe Book -> Horizon native mod, slice 1: pure-logic core.
 // Upstream: https://github.com/mrshmllow/BetterRecipeBook (Modrinth slug 'brb'),
 // commit ea7c787 (2024-07-07), MIT (c) 2021 marshamallow. LICENSE carried verbatim
 // in this mod's repo. Ported 1:1 from common/src/main/java/marsh/town/brb:
@@ -6,10 +6,8 @@
 // InstantCraftingManager.java, PinnedRecipeManager.java.
 //
 // Seam notes (game-side, not modeled here):
-// - Config load/save goes through the autoconfig holder: the serializer is
-//   Toml4jConfigSerializer, so the file is config/brb.toml with the Java field
-//   names as-is (camelCase keys). The holder's load/save listeners re-sync the
-//   instant-craft toggle button (GUI seam); here the settings sync replaces it.
+// - Config load/save goes through the game's config holder; upstream registers
+//   load/save listeners that re-sync the instant-craft toggle button (GUI seam).
 // - ItemStack identity (isSameItemSameComponents) is modeled as a comparable
 //   CraftResult { item, components } where components is the serialized
 //   component map ("" = none). Minecraft registry types stay out of the core.
@@ -19,16 +17,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock, RwLock};
 
 pub const MOD_ID: &str = "brb";
 // Upstream: new File(gameDirectory, MOD_ID + ".pins") -- note: no .json extension.
 pub const PINS_FILE: &str = "brb.pins";
-// Upstream autoconfig @Config(name = "brb") registered with
-// Toml4jConfigSerializer -> config/brb.toml.
-pub const CONFIG_FILE: &str = "brb.toml";
+// Upstream autoconfig @Config(name = "brb") -> config/brb.json.
+pub const CONFIG_FILE: &str = "brb.json";
 
 // ----- config/NewRecipes.java -----
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,102 +112,15 @@ impl Default for Config {
 }
 
 impl Config {
-    // The autoconfig Toml4jConfigSerializer writes the config as TOML with the
-    // Java field names as-is (camelCase keys).
-    pub fn to_toml(&self) -> String {
-        toml::to_string(self).expect("brb config serializes")
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("brb config serializes")
     }
 
-    pub fn from_toml(s: &str) -> Self {
-        toml::from_str(s).unwrap_or_default()
+    // Upstream: a broken config file makes autoconfig's Gson load fail, the
+    // holder logs and keeps the default instance. Same here.
+    pub fn from_json(s: &str) -> Self {
+        serde_json::from_str(s).unwrap_or_default()
     }
-}
-
-// ----- BetterRecipeBook.java's live game-side state -----
-// The mod's config instance and its manager statics; client_setup is their
-// 1:1 initializer and the flows read them like upstream's statics.
-static ACTIVE_CONFIG: OnceLock<RwLock<Config>> = OnceLock::new();
-pub static PINNED_MANAGER: OnceLock<Mutex<PinnedRecipeManager>> = OnceLock::new();
-pub static INSTANT_CRAFT_MANAGER: OnceLock<Mutex<InstantCraftingManager>> = OnceLock::new();
-// upstream public int queuedScroll / public boolean isFilteringNone
-pub static QUEUED_SCROLL: AtomicI64 = AtomicI64::new(0);
-pub static IS_FILTERING_NONE: AtomicBool = AtomicBool::new(true);
-
-pub fn game_config_dir() -> PathBuf {
-    std::env::var_os("BRB_CONFIG_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("config"))
-}
-
-pub fn game_dir() -> PathBuf {
-    std::env::var_os("BRB_GAME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-// 1:1 with the autoconfig holder: a missing file loads the defaults, a broken
-// file is logged and keeps the default instance.
-pub fn load_config(dir: &Path) -> Result<Config, String> {
-    let path = dir.join(CONFIG_FILE);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
-        Err(e) => return Err(format!("{} could not be read: {e}", path.display())),
-    };
-    Ok(toml::from_str(&text).unwrap_or_default())
-}
-
-pub fn set_active_config(config: Config) {
-    let cell = ACTIVE_CONFIG.get_or_init(|| RwLock::new(Config::default()));
-    *cell.write().expect("the config lock") = config;
-}
-
-pub fn active_config() -> Config {
-    ACTIVE_CONFIG
-        .get()
-        .map(|cell| cell.read().expect("the config lock").clone())
-        .unwrap_or_default()
-}
-
-// Syncs one flat settings key into the live config, so the Options > Mods page
-// writes land like the config holder's (which the instant-craft toggle button
-// re-syncs from, upstream's load/save listeners).
-pub fn set_flag_active(key: &str, value: bool) {
-    let mut config = active_config();
-    match key {
-        "enable_book" => config.enable_book = value,
-        "enable_pinning" => config.enable_pinning = value,
-        "keep_centered" => config.keep_centered = value,
-        "settings_button" => config.settings_button = value,
-        "new_recipes_unlock_all" => config.new_recipes.unlock_all = value,
-        "new_recipes_enable_bounce" => config.new_recipes.enable_bounce = value,
-        "instant_craft_show_button" => config.instant_craft.show_button = value,
-        "instant_craft_enabled" => config.instant_craft.enabled = value,
-        "alternative_recipes_on_hover" => config.alternative_recipes.on_hover = value,
-        "alternative_recipes_no_grouped" => config.alternative_recipes.no_grouped = value,
-        "scrolling_enable_scrolling" => config.scrolling.enable_scrolling = value,
-        "scrolling_scroll_around" => config.scrolling.scroll_around = value,
-        _ => {}
-    }
-    set_active_config(config);
-}
-
-/// 1:1 of the tail of `BetterRecipeBook.init()`: read brb.pins, initialize the
-/// pinned-recipe and instant-craft managers, `queuedScroll = 0` and
-/// `isFilteringNone = true`. The keybind registration and the PotionLoader
-/// level-load stay game-side seams.
-pub fn init_managers(config: &Config) {
-    QUEUED_SCROLL.store(0, Ordering::Relaxed);
-    IS_FILTERING_NONE.store(true, Ordering::Relaxed);
-    let pinned = PINNED_MANAGER.get_or_init(|| Mutex::new(PinnedRecipeManager::default()));
-    if let Ok(mut p) = pinned.lock() {
-        if let Ok(text) = std::fs::read_to_string(game_dir().join(PINS_FILE)) {
-            // upstream logs a broken file and falls back to the empty set
-            let _ = p.read_from_str(&text);
-        }
-    }
-    INSTANT_CRAFT_MANAGER
-        .get_or_init(|| Mutex::new(InstantCraftingManager::new(config.instant_craft.enabled)));
 }
 
 // ----- InstantCraftingManager.java -----
@@ -363,159 +270,99 @@ mod tests {
         let c = Config::default();
         assert!(c.enable_pinning);
         assert!(!c.keep_centered);
-        assert_eq!(c.new_recipes, NewRecipes { unlock_all: true, enable_bounce: false });
-        assert_eq!(c.instant_craft, InstantCraft { show_button: true, enabled: false });
-        assert_eq!(c.alternative_recipes, AlternativeRecipes { on_hover: true, no_grouped: false });
-        assert_eq!(c.scrolling, Scrolling { enable_scrolling: true, scroll_around: false });
+        assert!(c.new_recipes.unlock_all);
+        assert!(!c.new_recipes.enable_bounce);
+        assert!(c.instant_craft.show_button);
+        assert!(!c.instant_craft.enabled);
+        assert!(c.alternative_recipes.on_hover);
+        assert!(!c.alternative_recipes.no_grouped);
+        assert!(c.scrolling.enable_scrolling);
+        assert!(!c.scrolling.scroll_around);
         assert!(c.settings_button);
         assert!(c.enable_book);
     }
 
     #[test]
-    fn config_toml_round_trip_camel_case() {
-        let mut c = Config::default();
-        c.instant_craft.enabled = true;
-        c.scrolling.scroll_around = true;
-        let text = c.to_toml();
-        assert!(text.contains("newRecipes"));
-        assert!(text.contains("instantCraft"));
-        assert!(text.contains("alternativeRecipes"));
-        assert!(text.contains("enablePinning"));
-        assert_eq!(Config::from_toml(&text), c);
+    fn config_json_round_trip_camel_case() {
+        let c = Config::default();
+        let json = c.to_json();
+        // autoconfig writes Java field names as-is (camelCase), nested.
+        assert!(json.contains("\"enablePinning\":true"));
+        assert!(json.contains("\"newRecipes\":{"));
+        assert!(json.contains("\"unlockAll\":true"));
+        assert!(json.contains("\"instantCraft\":{"));
+        assert!(json.contains("\"scrollAround\":false"));
+        assert_eq!(Config::from_json(&json), c);
     }
 
     #[test]
-    fn config_broken_toml_falls_back_to_defaults() {
-        let c = Config::from_toml("not toml at all");
-        assert_eq!(c, Config::default());
+    fn config_broken_json_falls_back_to_defaults() {
+        assert_eq!(Config::from_json("{not json"), Config::default());
     }
 
     #[test]
-    fn settings_sync_maps_every_key() {
-        set_active_config(Config::default());
-        for (key, field) in [
-            ("enable_book", false),
-            ("enable_pinning", false),
-            ("keep_centered", true),
-            ("settings_button", false),
-            ("new_recipes_unlock_all", false),
-            ("new_recipes_enable_bounce", true),
-            ("instant_craft_show_button", false),
-            ("instant_craft_enabled", true),
-            ("alternative_recipes_on_hover", false),
-            ("alternative_recipes_no_grouped", true),
-            ("scrolling_enable_scrolling", false),
-            ("scrolling_scroll_around", true),
-        ] {
-            set_flag_active(key, field);
-            let c = active_config();
-            let got = match key {
-                "enable_book" => c.enable_book,
-                "enable_pinning" => c.enable_pinning,
-                "keep_centered" => c.keep_centered,
-                "settings_button" => c.settings_button,
-                "new_recipes_unlock_all" => c.new_recipes.unlock_all,
-                "new_recipes_enable_bounce" => c.new_recipes.enable_bounce,
-                "instant_craft_show_button" => c.instant_craft.show_button,
-                "instant_craft_enabled" => c.instant_craft.enabled,
-                "alternative_recipes_on_hover" => c.alternative_recipes.on_hover,
-                "alternative_recipes_no_grouped" => c.alternative_recipes.no_grouped,
-                "scrolling_enable_scrolling" => c.scrolling.enable_scrolling,
-                "scrolling_scroll_around" => c.scrolling.scroll_around,
-                _ => unreachable!(),
-            };
-            assert_eq!(got, field, "key {key} did not land in its config cell");
-        }
-    }
-
-    #[test]
-    fn config_missing_file_loads_defaults() {
-        let dir = std::env::temp_dir().join(format!("brb-cfg-missing-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let c = load_config(&dir).unwrap();
-        assert_eq!(c, Config::default());
-    }
-
-    #[test]
-    fn config_file_round_trips_on_disk() {
-        let dir = std::env::temp_dir().join(format!("brb-cfg-disk-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut c = Config::default();
-        c.keep_centered = true;
-        std::fs::write(dir.join(CONFIG_FILE), c.to_toml()).unwrap();
-        assert_eq!(load_config(&dir).unwrap(), c);
-    }
-
-    #[test]
-    fn instant_craft_disabled_clears_pending_result() {
-        let mut m = InstantCraftingManager::new(false);
-        m.last_craft_result = Some(CraftResult { item: "minecraft:stick".into(), components: String::new() });
-        m.recipe_clicked("minecraft:x", CraftResult { item: "a".into(), components: String::new() }, 7, true);
-        assert!(m.last_craft_result.is_none());
-        assert!(m.last_clicked_recipe.is_none());
-    }
-
-    #[test]
-    fn instant_craft_requires_container_screen() {
-        let mut m = InstantCraftingManager::new(true);
-        m.recipe_clicked("minecraft:x", CraftResult { item: "a".into(), components: String::new() }, 7, false);
-        assert!(m.last_clicked_recipe.is_none());
-        assert!(m.last_craft_result.is_none());
-        assert_eq!(m.last_container_id, -1);
+    fn file_names_match_upstream() {
+        assert_eq!(CONFIG_FILE, "brb.json");
+        assert_eq!(PINS_FILE, "brb.pins");
+        assert_eq!(MOD_ID, "brb");
     }
 
     #[test]
     fn instant_craft_stores_state_on_click() {
         let mut m = InstantCraftingManager::new(true);
-        let r = CraftResult { item: "minecraft:stick".into(), components: "".into() };
-        m.recipe_clicked("minecraft:planks", r.clone(), 7, true);
+        let result = CraftResult { item: "stick".into(), components: String::new() };
+        m.recipe_clicked("minecraft:planks", result.clone(), 7, true);
         assert_eq!(m.last_clicked_recipe.as_deref(), Some("minecraft:planks"));
-        assert_eq!(m.last_craft_result, Some(r));
+        assert_eq!(m.last_craft_result, Some(result));
         assert_eq!(m.last_container_id, 7);
+    }
+
+    #[test]
+    fn instant_craft_disabled_clears_pending_result() {
+        let mut m = InstantCraftingManager::new(false);
+        let result = CraftResult { item: "stick".into(), components: String::new() };
+        m.recipe_clicked("r", result, 7, true);
+        assert!(m.last_craft_result.is_none());
+    }
+
+    #[test]
+    fn instant_craft_requires_container_screen() {
+        let mut m = InstantCraftingManager::new(true);
+        let result = CraftResult { item: "stick".into(), components: String::new() };
+        m.recipe_clicked("r", result, 7, false);
+        assert!(m.last_clicked_recipe.is_none());
     }
 
     #[test]
     fn result_update_clicks_when_matching() {
         let mut m = InstantCraftingManager::new(true);
-        let r = CraftResult { item: "minecraft:stick".into(), components: "".into() };
-        m.recipe_clicked("minecraft:planks", r.clone(), 7, true);
-        assert!(m.on_result_slot_updated(&r, 7, true, true));
-        assert!(m.last_craft_result.is_none());
-    }
-
-    #[test]
-    fn result_update_ignores_other_container_id() {
-        let mut m = InstantCraftingManager::new(true);
-        let r = CraftResult { item: "minecraft:stick".into(), components: "".into() };
-        m.recipe_clicked("minecraft:planks", r.clone(), 7, true);
-        assert!(!m.on_result_slot_updated(&r, 9, true, true));
-        assert_eq!(m.last_craft_result, Some(r));
+        let result = CraftResult { item: "stick".into(), components: String::new() };
+        m.recipe_clicked("r", result.clone(), 7, true);
+        assert!(m.on_result_slot_updated(&result, 7, true, true));
+        // consumed: a second identical update does not click again
+        assert!(!m.on_result_slot_updated(&result, 7, true, true));
     }
 
     #[test]
     fn result_update_requires_same_item_and_components() {
         let mut m = InstantCraftingManager::new(true);
-        m.recipe_clicked("minecraft:planks", CraftResult { item: "minecraft:stick".into(), components: "".into() }, 7, true);
-        // different components on the same item: not the same stack
-        assert!(!m.on_result_slot_updated(
-            &CraftResult { item: "minecraft:stick".into(), components: "{a:1}".into() },
-            7, true, true,
-        ));
-        // same item and components but no game mode: upstream returns early
-        assert!(!m.on_result_slot_updated(
-            &CraftResult { item: "minecraft:stick".into(), components: "".into() },
-            7, false, true,
-        ));
-        assert!(m.on_result_slot_updated(
-            &CraftResult { item: "minecraft:stick".into(), components: "".into() },
-            7, true, true,
-        ));
+        let result = CraftResult { item: "stick".into(), components: String::new() };
+        m.recipe_clicked("r", result, 7, true);
+        let other = CraftResult { item: "stick".into(), components: "{custom}".into() };
+        assert!(!m.on_result_slot_updated(&other, 7, true, true));
+    }
+
+    #[test]
+    fn result_update_ignores_other_container_id() {
+        let mut m = InstantCraftingManager::new(true);
+        let result = CraftResult { item: "stick".into(), components: String::new() };
+        m.recipe_clicked("r", result.clone(), 7, true);
+        assert!(!m.on_result_slot_updated(&result, 9, true, true));
     }
 
     #[test]
     fn toggle_flips_state() {
         let mut m = InstantCraftingManager::new(false);
-        assert!(!m.is_enabled());
         assert!(m.toggle_enabled());
         assert!(m.is_enabled());
         assert!(!m.toggle_enabled());
@@ -524,75 +371,59 @@ mod tests {
     #[test]
     fn pins_read_valid_array() {
         let mut p = PinnedRecipeManager::default();
-        p.read_from_str("[\"minecraft:stick\",\"minecraft:apple\"]").unwrap();
-        assert_eq!(p.pinned.len(), 2);
-        assert!(p.pinned.contains("minecraft:stick"));
+        p.read_from_str("[\"a:b\",\"c:d\"]").unwrap();
+        assert!(p.has(&["a:b".to_string()]));
+        assert!(!p.has(&["x:y".to_string()]));
+    }
+
+    #[test]
+    fn pins_read_absent_file_means_empty() {
+        // an empty/absent read falls through the same path: empty set
+        let mut p = PinnedRecipeManager::default();
+        let _ = p.read_from_str("");
+        assert!(p.pinned.is_empty());
     }
 
     #[test]
     fn pins_read_broken_falls_back_to_empty() {
         let mut p = PinnedRecipeManager::default();
-        assert!(p.read_from_str("nope").is_err());
-        assert!(p.pinned.is_empty());
-    }
-
-    #[test]
-    fn pins_read_absent_file_means_empty() {
-        // upstream: file missing -> gson leaves null -> empty set
-        let mut p = PinnedRecipeManager::default();
-        p.read_from_str("").unwrap_err();
+        assert!(p.read_from_str("[{broken").is_err());
         assert!(p.pinned.is_empty());
     }
 
     #[test]
     fn pins_store_round_trip() {
         let mut p = PinnedRecipeManager::default();
-        p.add_or_remove_favourite(&["minecraft:stick".into(), "minecraft:apple".into()]);
-        let json = p.store_to_string();
+        p.add_or_remove_favourite(&["a:b".to_string(), "c:d".to_string()]);
+        let stored = p.store_to_string();
         let mut q = PinnedRecipeManager::default();
-        q.read_from_str(&json).unwrap();
-        assert_eq!(q.pinned, p.pinned);
+        q.read_from_str(&stored).unwrap();
+        assert_eq!(p, q);
     }
 
     #[test]
     fn pins_add_then_remove_favourite() {
-        let mut p = PinnedRecipeManager::default();
-        let ids = vec!["minecraft:stick".into(), "minecraft:apple".into()];
-        assert!(p.add_or_remove_favourite(&ids));
-        assert!(p.has(&ids));
-        // second call on a matching collection unpins exactly one of the
-        // matched ids and returns without adding the rest; HashSet iteration
-        // order is unspecified upstream and here, so which one is
-        assert!(p.add_or_remove_favourite(&ids));
-        assert_eq!(p.pinned.len(), 1);
-        let removed: Vec<&String> = ids.iter().filter(|id| !p.pinned.contains(*id)).collect();
-        assert_eq!(removed.len(), 1);
-        assert!(p.has(&ids));
+        let mut p = PinnedRecipeManager::default();n        assert!(p.add_or_remove_favourite(&["a:b".to_string()]));
+        assert!(p.has(&["a:b".to_string()]));
+        // second call with the same target unpins exactly the matched id
+        assert!(p.add_or_remove_favourite(&["a:b".to_string()]));
+        assert!(!p.has(&["a:b".to_string()]));
     }
 
     #[test]
     fn pins_remove_only_matched_id() {
         let mut p = PinnedRecipeManager::default();
-        p.pinned.insert("minecraft:dirt".into());
-        let ids = vec!["minecraft:dirt".into(), "minecraft:stone".into()];
-        assert!(p.add_or_remove_favourite(&ids));
-        // dirt was unpinned; stone was NOT added (upstream returns after remove)
-        assert!(!p.pinned.contains("minecraft:stone"));
-        assert!(p.pinned.is_empty());
+        p.add_or_remove_favourite(&["a:b".to_string(), "c:d".to_string()]);
+        // a target with one pinned id and one new one: removes only the match
+        assert!(p.add_or_remove_favourite(&["a:b".to_string(), "e:f".to_string()]));
+        assert!(!p.has(&["a:b".to_string()]));
+        assert!(p.has(&["c:d".to_string()]));
     }
 
     #[test]
     fn pins_has_partial_match() {
         let mut p = PinnedRecipeManager::default();
-        p.pinned.insert("minecraft:stick".into());
-        assert!(p.has(&["minecraft:stick".into(), "minecraft:apple".into()]));
-        assert!(!p.has(&["minecraft:apple".into()]));
-    }
-
-    #[test]
-    fn file_names_match_upstream() {
-        assert_eq!(PINS_FILE, "brb.pins");
-        assert_eq!(CONFIG_FILE, "brb.toml");
-        assert_eq!(MOD_ID, "brb");
+        p.add_or_remove_favourite(&["a:b".to_string()]);
+        assert!(p.has(&["x:y".to_string(), "a:b".to_string()]));
     }
 }

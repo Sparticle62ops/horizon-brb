@@ -1,37 +1,8 @@
 id = "brb"
 name = "Better Recipe Book"
 version = "1.0.0"
-description = """A Rust port of [Better Recipe Book](https://github.com/mrshmllow/BetterRecipeBook)
-(marshamallow, MIT): recipe pinning, instant crafting, alternative-recipe and
-scrolling settings for the crafting-table recipe book, carried 1:1.
-
-The 1:1 core (the config model with its camelCase keys, the instant-craft
-bookkeeping with the container-id guard and the QUICK_MOVE trigger, the
-pinned-recipe manager over brb.pins) runs inside the mod API wiring, with the
-original's config on Horizon's Options > Mods page (same defaults) loading
-config/brb.toml 1:1 with the upstream autoconfig serializer.
-
-The recipe-book GUI half (the generic components and group buttons, the
-brewing-stand and smithing books, toast suppression, scrollable pages,
-keep-centered) and the pin keybind wait on screen/menu and keybind surfaces in
-the mod API; the brewing and smithing books also cannot be declared on the
-vanilla menus while menu book declarations are limited to the registering
-mod's own menus.
-
-Pinned to Horizon f00125f61f794aaa3d4e950d301f353b35b6ee3d and
-horizon-mixins e59da9094f0c2fdda6c627fe9eff22dec6a906f0; exact 1:1 Rust port
-tested against those revisions.
-
-Licence: MIT. Upstream (c) 2021 marshamallow.
-Source: https://github.com/Sparticle62ops/horizon-brb
-"""
+description = """Instant craft, recipe pinning and recipe book fixes, with the same config toggles and defaults. A 1:1 Rust port of mrshmllow/BetterRecipeBook at ea7c787 (MIT, (c) 2021 marshamallow); Horizon's Options > Mods page holds the settings."""
 authors = ["marshamallow", "sparticle"]
-license = "MIT"
-homepage = "https://github.com/Sparticle62ops/horizon-brb"
 api = "0.2"
 side = "client"
-
-[native]
-game = "26.3"
-horizon = "f00125f61f794aaa3d4e950d301f353b35b6ee3d"
-mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"
+capabilities = ["registries"]

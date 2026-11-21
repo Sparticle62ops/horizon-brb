@@ -1,10 +1,10 @@
 [package]
 name = "horizon-mod-brb"
 version = "1.0.0"
-edition = "2024"
+edition = "2021"
 license = "MIT"
 publish = false
-description = "Better Recipe Book ported to Horizon (1:1 core: config, instant craft manager, pinned recipe manager). Upstream: github.com/mrshmllow/BetterRecipeBook, MIT (c) 2021 marshamallow."
+description = "Better Recipe Book ported to Horizon (slice 1: config model, instant craft manager, pinned recipe manager). Upstream: github.com/mrshmllow/BetterRecipeBook, MIT (c) 2021 marshamallow."
 
 [lib]
 path = "src/lib.rs"
@@ -13,4 +13,3 @@ path = "src/lib.rs"
 horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
